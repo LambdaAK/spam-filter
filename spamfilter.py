@@ -5,142 +5,46 @@ import time
 import torch.nn as nn
 import torch
 import random
-# the first column is the label
-# the second column is the text
+import sys
+import json
 
+# load the data from training_data.json and testing_data.json
 
-# read from enron_spam_data.csv
+word_to_index = json.load(open("word_to_index.json"))
+print("finished loading word_to_index")
 
-csv_data = pd.read_csv("enron_spam_data.csv")
+index_to_word = json.load(open("index_to_word.json"))
+print("finished loading index_to_word")
 
+training_data = json.load(open("training_data_subset.json"))
+print("finished loading training_data")
 
-data = []
+# convert the data to tensors
 
-for index, row in csv_data.iterrows():
-  message = row['Message']
-  if str(message) == 'nan':
-    continue
-  label = row['Spam/Ham']
-  if label == 'spam':
-    label = 1
-  else:
-    label = 0
-  data.append([str(message), label])
+for i in range(len(training_data)):
+  sentence, label = training_data[i]
+  sentence = torch.tensor(sentence)
+  label = torch.tensor([label])
+  training_data[i] = [sentence, label]
 
-# turn all of the words into lowercase and get rid of punctuation
+testing_data = json.load(open("testing_data.json"))
+print("finished loading testing_data")
 
-def clean_data(data):
-  cleaned_data = []
-  for message, label in data:
-    message = message.lower()
-    message = message.translate(str.maketrans('', '', string.punctuation))
-    cleaned_data.append([message, label])
-  return cleaned_data
+for i in range(len(testing_data)):
+  sentence, label = testing_data[i]
+  sentence = torch.tensor(sentence)
+  label = torch.tensor([label])
+  testing_data[i] = [sentence, label]
 
-cleaned_data = clean_data(data)
-
-# split the messages into lists of words
-
-for i in range(len(cleaned_data)):
-  cleaned_data[i][0] = cleaned_data[i][0].split()
-
-# create a list of all of the words in the dataset
-  
-words = set()
-for message, label in cleaned_data:
-  for word in message:
-    words.add(word)
-
-words = list(words)
-words.sort()
-
-# make a frequency dictionary for each word in the dataset
-
-word_to_freq = {}
-for word in words:
-  word_to_freq[word] = 0
-
-for message, label in cleaned_data:
-  for word in message:
-    word_to_freq[word] += 1
-
-# print the words in order of frequency
-    
-word_freq = []
-for word in words:
-  word_freq.append([word, word_to_freq[word]])
-
-word_freq.sort(key=lambda x: x[1], reverse=True)
-
-# get rid of words that appear less than 10 times
-
-for i in range(len(word_freq) - 1, -1, -1):
-  if word_freq[i][1] < 20:
-    word_freq.pop(i)
-
-words = []
-
-for word, freq in word_freq:
-  words.append(word)
-
-# create a dictionary that maps each word to an index
-
-word_to_index = {}
-
-for i in range(len(words)):
-  word_to_index[words[i]] = i
-
-# turn the messages into bag of words vectors
-  
-def message_to_vector(message):
-  vector = torch.zeros(len(words))
-  for word in message:
-    if word in word_to_index:
-      vector[word_to_index[word]] += 1
-  return vector
-
-for i in range(len(cleaned_data)):
-  cleaned_data[i][0] = message_to_vector(cleaned_data[i][0])
-  cleaned_data[i][1] = torch.tensor([cleaned_data[i][1]], dtype=torch.float32)
-
-# split the data into training and testing data
-  
-random.shuffle(cleaned_data)
-
-training_data = cleaned_data[:int(len(cleaned_data) * 0.9)]
-testing_data = cleaned_data[int(len(cleaned_data) * 0.9):]
-
-# print the number of each label in the training and testing data
-
-spam_in_training = 0
-ham_in_training = 0
-
-for message, label in training_data:
-  if label.item() == 1:
-    spam_in_training += 1
-  else:
-    ham_in_training += 1
-
-spam_in_testing = 0
-ham_in_testing = 0
-
-for message, label in testing_data:
-  if label.item() == 1:
-    spam_in_testing += 1
-  else:
-    ham_in_testing += 1
-
-print("Spam in training data: ", spam_in_training)
-print("Ham in training data: ", ham_in_training)
-print("Spam in testing data: ", spam_in_testing)
-print("Ham in testing data: ", ham_in_testing)
-
+words = json.load(open("words.json"))
+print("finished loading words")
 
 class NN(nn.Module):
   def __init__(self):
     super(NN, self).__init__()
-    self.fc1 = nn.Linear(len(words), 5)
-    self.fc2 = nn.Linear(5, 1)
+    self.fc1 = nn.Linear(len(words), 128)
+    self.fc2 = nn.Linear(128, 64)
+    self.fc3 = nn.Linear(64, 1)
     self.relu = nn.ReLU()
     self.sigmoid = nn.Sigmoid()
 
@@ -148,33 +52,55 @@ class NN(nn.Module):
     x = self.fc1(x)
     x = self.relu(x)
     x = self.fc2(x)
+    x = self.relu(x)
+    x = self.fc3(x)
     x = self.sigmoid(x)
     return x
 
-num_epochs = 50
+num_epochs = 100
 
 def train_model():
   print("training model")
   # keep track of the loss for each epoch and print it
-  model = NN()
+  
+  # load the model
+  model = torch.load("model.pth")
+
   criterion = nn.BCELoss()
   optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
+
+  # compute 10%, .... 90% of the dataset indices
+  ten = len(training_data) // 10
+  printing_points = [i * ten for i in range(1, 10)]
+
+
   for epoch in range(num_epochs):
     total_loss = 0
-    for sentence, label in training_data[:1000]:
+    for i in range(len(training_data)):
+      sentence, label = training_data[i]
       optimizer.zero_grad()
       output = model(sentence)
       loss = criterion(output, label)
       loss.backward()
       optimizer.step()
       total_loss += loss.item()
+      # every 10% through the dataset, print a message
+      if i in printing_points:
+        print(f"{i / len(training_data) * 100}% done with epoch {epoch + 1}")
       
     print("Epoch: ", epoch + 1)
     print("Loss: ", total_loss)
+    torch.save(model, "model.pth")
   
-  return model
+  # save the model
 
-def test_model(model):
+
+def make_model():
+  print("making model")
+  model = NN()
+  torch.save(model, "model.pth")
+
+def validate_model(model):
   correct = 0
   total = 0
   for sentence, label in testing_data:
@@ -184,11 +110,25 @@ def test_model(model):
     if output == label:
       correct += 1
     total += 1
-    
+
   print("Accuracy: ", correct / total)
   print("Correct: ", correct)
   print("Total: ", total)
 
+def test_model():
+  model = torch.load("model.pth")
+  while True:
+    sentence = input("Enter a sentence: ")
+    sentence = sentence.lower()
+    sentence = sentence.translate(str.maketrans("", "", string.punctuation))
+    sentence = sentence.split()
+    sentence_tensor = torch.zeros(len(words))
+    for word in sentence:
+      if word in word_to_index:
+        sentence_tensor[word_to_index[word]] = 1
 
-model = train_model()
-test_model(model)
+    prediction = model(sentence_tensor)
+    prediction_string = "spam" if prediction.item() > 0.5 else "not spam"
+    print(f"The sentence is {prediction_string}")
+
+test_model()
